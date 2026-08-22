@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.*.local
+*.log
+.DS_Store
+coverage/
+.turbo/
+
+# Prisma
+packages/db/prisma/*.db
+packages/db/node_modules/.prisma/
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/

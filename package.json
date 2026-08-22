@@ -1,0 +1,25 @@
+{
+  "name": "syncrank",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w apps/web",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:worker": "npm run dev -w apps/worker",
+    "build": "npm run build -w packages/shared && npm run prisma:generate && npm run build -w apps/api && npm run build -w apps/worker && npm run build -w apps/web",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w apps/api && npm run typecheck -w apps/worker",
+    "test": "npm run test -w packages/shared && npm run test -w apps/api --if-present",
+    "lint": "npm run lint -w apps/api --if-present && npm run lint -w apps/web --if-present",
+    "prisma:generate": "npm run prisma:generate -w packages/db",
+    "prisma:migrate:dev": "npm run prisma:migrate:dev -w packages/db",
+    "prisma:migrate:deploy": "npm run prisma:migrate:deploy -w packages/db",
+    "prisma:seed": "npm run prisma:seed -w packages/db"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
