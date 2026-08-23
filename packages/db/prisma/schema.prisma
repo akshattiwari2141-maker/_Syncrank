@@ -1,0 +1,230 @@
+// SyncRank data model.
+// UUIDs everywhere, timestamps with timezone, indexes on the columns the
+// leaderboard/admin/contest queries actually filter or sort by.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  campus_admin
+}
+
+enum ContestStatus {
+  draft
+  scheduled
+  live
+  completed
+}
+
+enum ContestVisibility {
+  campus
+  public
+}
+
+enum ScoringMode {
+  acm
+  score
+}
+
+enum Difficulty {
+  easy
+  med
+  hard
+}
+
+enum Verdict {
+  accepted
+  wrong_answer
+  time_limit
+  runtime_error
+}
+
+enum SyncJobStatus {
+  queued
+  running
+  success
+  failed
+}
+
+model Campus {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  city      String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  users    User[]
+  contests Contest[]
+
+  @@map("campuses")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(student)
+  branch       String?
+  gradYear     Int?
+  campusId     String
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  campus Campus @relation(fields: [campusId], references: [id], onDelete: Restrict)
+
+  handleLink        HandleLink?
+  ratingSnapshots    RatingSnapshot[]
+  contestsCreated    Contest[]              @relation("ContestCreatedBy")
+  registrations      ContestRegistration[]
+  submissions        Submission[]
+  syncJobLogs        SyncJobLog[]
+
+  // Leaderboard queries filter by campusId and sort by current syncScore
+  // (denormalized onto the latest RatingSnapshot, read via a join/subquery).
+  @@index([campusId])
+  @@index([campusId, role])
+  @@map("users")
+}
+
+model HandleLink {
+  id           String    @id @default(uuid())
+  userId       String    @unique
+  cfHandle     String?
+  lcUsername   String?
+  lastSyncedAt DateTime? @db.Timestamptz(6)
+  lastError    String?
+  isStale      Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([lastSyncedAt])
+  @@map("handle_links")
+}
+
+model RatingSnapshot {
+  id                String   @id @default(uuid())
+  userId            String
+  cfRating          Int?
+  lcSolvedTotal      Int?
+  lcSolvedLast30d    Int?
+  lcSolvedLast90d    Int?
+  syncScore         Int
+  syncScoreVersion  Int
+  campusRank        Int?
+  globalRank        Int?
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Leaderboard reads: latest snapshot per user, ordered by syncScore desc,
+  // scoped to campus via the user relation. This composite index backs
+  // "give me this user's most recent snapshot" and score-sorted scans.
+  @@index([userId, createdAt])
+  @@index([syncScore])
+  @@map("rating_snapshots")
+}
+
+model Contest {
+  id               String            @id @default(uuid())
+  campusId         String
+  createdById      String
+  title            String
+  description      String?
+  startAt          DateTime?         @db.Timestamptz(6)
+  durationMins     Int
+  status           ContestStatus     @default(draft)
+  visibility       ContestVisibility @default(campus)
+  scoringMode      ScoringMode       @default(acm)
+  participantsMode String            @default("all") // "all" | "invite"
+  createdAt        DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
+
+  campus      Campus                @relation(fields: [campusId], references: [id], onDelete: Cascade)
+  createdBy   User                  @relation("ContestCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  problems    ContestProblem[]
+  registrations ContestRegistration[]
+  submissions Submission[]
+
+  @@index([campusId, status])
+  @@index([status, startAt])
+  @@map("contests")
+}
+
+model ContestProblem {
+  id         String     @id @default(uuid())
+  contestId  String
+  code       String
+  title      String
+  difficulty Difficulty
+  points     Int
+  order      Int
+
+  contest     Contest      @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+
+  @@index([contestId, order])
+  @@map("contest_problems")
+}
+
+model ContestRegistration {
+  id         String   @id @default(uuid())
+  contestId  String
+  userId     String
+  registeredAt DateTime @default(now()) @db.Timestamptz(6)
+
+  contest Contest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([contestId, userId])
+  @@index([contestId])
+  @@map("contest_registrations")
+}
+
+model Submission {
+  id           String   @id @default(uuid())
+  idempotencyKey String? @unique
+  contestId    String
+  problemId    String
+  userId       String
+  verdict      Verdict
+  penaltyMins  Int      @default(0)
+  submittedAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  contest Contest        @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  problem ContestProblem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Standings computation reads all submissions for a contest, and per-user
+  // history is queried when showing "your submissions".
+  @@index([contestId, userId])
+  @@index([contestId, submittedAt])
+  @@map("submissions")
+}
+
+model SyncJobLog {
+  id          String        @id @default(uuid())
+  userId      String
+  status      SyncJobStatus
+  source      String // "codeforces" | "leetcode"
+  attempt     Int           @default(1)
+  errorMessage String?
+  rawPayload  Json? // size-capped at the application layer before insert
+  startedAt   DateTime      @default(now()) @db.Timestamptz(6)
+  finishedAt  DateTime?     @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([status])
+  @@map("sync_job_logs")
+}
